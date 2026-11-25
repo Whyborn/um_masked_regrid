@@ -1,0 +1,36 @@
+{% set version = environ.get('GIT_DESCRIBE_TAG', 'v0.0.0').lstrip('v') %}
+
+package:
+  name: um_masked_regrid
+  version: "{{ version }}"
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: 0
+  script: "{{ PYTHON }} -m pip install . --no-deps -vv"
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=77
+    - versioneer =0.29
+    - tomli  # [py<311]
+  run:
+    - python >=3.10
+    - numpy
+    - scipy
+    - iris >=3.7
+
+test:
+  imports:
+    - um_masked_regrid
+
+about:
+  home: https://github.com/Whyborn/um_masked_regrid
+  license: Apache-2.0
+  license_file: LICENSE
+  summary: Masked regridding of UM fields defined on part of a grid, such as CABLE tile fields, reproducing the UM reconfiguration's interpolation.

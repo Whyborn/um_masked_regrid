@@ -1,0 +1,13 @@
+name: um_masked_regrid-3.11
+channels:
+  - conda-forge
+dependencies:
+  - python==3.11
+  - pip>=24.0
+  - numpy
+  - scipy
+  - iris>=3.7
+  - dask
+  - cartopy
+  - coverage>=7.0.0
+  - pytest>=7

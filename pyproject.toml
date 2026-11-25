@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=77", "versioneer[toml]==0.29"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "um_masked_regrid"
+dynamic = ["version"]
+description = "Masked regridding of UM fields defined on part of a grid, such as CABLE tile fields, reproducing the UM reconfiguration's interpolation."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  {name = "ACCESS-NRI", email = "lachlan.whyborn@anu.edu.au"}
+]
+maintainers = [
+  {name = "ACCESS-NRI", email = "lachlan.whyborn@anu.edu.au"}
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "COPYRIGHT"]
+dependencies = [
+  "numpy",
+  "scipy",
+  "scitools-iris>=3.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "coverage",  # testing
+    "dask",  # testing lazy data
+    "pytest>=7",  # testing
+    "ruff",  # linting
+    ]
+
+[project.urls]
+
+bugs = "https://github.com/Whyborn/um_masked_regrid/issues"
+changelog = "https://github.com/Whyborn/um_masked_regrid/blob/main/HISTORY.rst"
+homepage = "https://github.com/Whyborn/um_masked_regrid"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+"*" = ["*.*"]
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "src/um_masked_regrid/_version.py"
+versionfile_build = "um_masked_regrid/_version.py"
+tag_prefix = "v"
+parentdir_prefix = "um_masked_regrid-"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = [
+    "*/_version.py",
+    "*/data/__init__.py",
+]
