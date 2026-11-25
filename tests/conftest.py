@@ -117,10 +117,12 @@ def regrid_values(regridder, values, fill_value=np.nan, source_missing_value=Non
 
 
 def true_latitudes(cube):
+    """True latitudes of every point of a cube, as a 2D array."""
     return true_point_coordinates(cube)[0]
 
 
 def true_longitudes(cube):
+    """True longitudes of every point of a cube, as a 2D array."""
     return true_point_coordinates(cube)[1]
 
 
@@ -133,14 +135,17 @@ def smooth_field(cube):
 
 
 def random_mask(cube, valid_fraction, seed):
+    """A reproducible random mask, true at about `valid_fraction` of the cube's points."""
     return np.random.default_rng(seed).random(cube.shape) < valid_fraction
 
 
 @pytest.fixture
 def coarse_grid():
+    """An all-true global 5 degree grid (36x72)."""
     return global_mask_cube(5.0)
 
 
 @pytest.fixture
 def fine_grid():
+    """An all-true global 2 degree grid (90x180)."""
     return global_mask_cube(2.0)

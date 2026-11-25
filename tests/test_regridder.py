@@ -1,3 +1,10 @@
+"""Tests of `build_regridder` and the `CubeRegridder` it returns.
+
+They cover the values it produces, how it handles masks and missing data, and the output cube it
+builds. Most run on global 5 degree ("coarse") and 2 degree ("fine") grids with random masks, and
+many run once per weight builder, because these properties should hold whatever the method.
+"""
+
 import functools
 
 import dask.array
@@ -40,6 +47,7 @@ INVALID_SENTINEL = 1.0e30
 
 
 def build_masked_regridder(source_grid, source_mask, target_grid, target_mask, weight_builder=um_bilinear_weights):
+    """Build a regridder from two grids and a boolean mask for each."""
     return build_regridder(with_mask(source_grid, source_mask), with_mask(target_grid, target_mask), weight_builder)
 
 
@@ -48,6 +56,9 @@ def build_masked_regridder(source_grid, source_mask, target_grid, target_mask, w
 
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 def test_same_grid_and_mask_reproduces_the_field_exactly(weight_builder, coarse_grid):
+    """Regridding onto the same grid with the same mask returns the field bitwise unchanged at every
+    valid point, and the fill value (NaN) everywhere else.
+    """
     mask = random_mask(coarse_grid, valid_fraction=0.4, seed=0)
     field = smooth_field(coarse_grid)
     regridder = build_masked_regridder(coarse_grid, mask, coarse_grid, mask, weight_builder)
@@ -59,6 +70,10 @@ def test_same_grid_and_mask_reproduces_the_field_exactly(weight_builder, coarse_
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 @pytest.mark.parametrize("direction", ["refine", "coarsen"])
 def test_masked_out_source_points_never_contribute(weight_builder, direction, coarse_grid, fine_grid):
+    """Source points outside the source mask hold a huge sentinel value. Every regridded value stays
+    within the range of the valid source values, so the sentinel never leaks in, and points outside
+    the target mask get the fill value. Checked going from coarse to fine and from fine to coarse.
+    """
     source_grid, target_grid = (coarse_grid, fine_grid) if direction == "refine" else (fine_grid, coarse_grid)
     source_mask = random_mask(source_grid, valid_fraction=0.3, seed=1)
     target_mask = random_mask(target_grid, valid_fraction=0.6, seed=2)
@@ -75,6 +90,9 @@ def test_masked_out_source_points_never_contribute(weight_builder, direction, co
 
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 def test_every_target_mask_point_is_filled_even_when_masks_barely_overlap(weight_builder, coarse_grid, fine_grid):
+    """With the source defined only south of 10S and the target only north of 10N, every target
+    point still gets a finite value, borrowed from far away.
+    """
     # Source field exists only in the southern hemisphere, target only in the northern.
     source_mask = true_latitudes(coarse_grid) < -10.0
     target_mask = true_latitudes(fine_grid) > 10.0
@@ -86,6 +104,7 @@ def test_every_target_mask_point_is_filled_even_when_masks_barely_overlap(weight
 
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 def test_constant_field_is_preserved(weight_builder, coarse_grid, fine_grid):
+    """A constant field stays constant: each output is a weighted mean with weights summing to 1."""
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=3)
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=4)
     regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, target_mask, weight_builder)
@@ -94,6 +113,9 @@ def test_constant_field_is_preserved(weight_builder, coarse_grid, fine_grid):
 
 
 def test_nearest_neighbour_copies_source_values_unchanged(coarse_grid, fine_grid):
+    """Nearest-neighbour regridding of integer categories gives only values present in the valid
+    source, never blends, so it's safe for flags and categories.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=5)
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=6)
     # Integer categories: every output must be one of the inputs, never a blend.
@@ -105,6 +127,9 @@ def test_nearest_neighbour_copies_source_values_unchanged(coarse_grid, fine_grid
 
 
 def test_isolated_target_point_takes_the_only_available_source_value(coarse_grid, fine_grid):
+    """When a surface type exists at only one source point, every target point of that type takes
+    its value, whichever method is used.
+    """
     # The surface type exists at one source point only, on the far side of the globe.
     source_mask = np.zeros(coarse_grid.shape, dtype=bool)
     source_mask[5, 7] = True
@@ -118,6 +143,9 @@ def test_isolated_target_point_takes_the_only_available_source_value(coarse_grid
 
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 def test_longitude_convention_does_not_change_the_result(weight_builder, coarse_grid):
+    """Describing the same source grid with longitudes in -180 to 180 rather than 0 to 360 (with the
+    data rolled to match) gives the same result, for every method.
+    """
     # Offset the target so no target point is equidistant from two source points;
     # otherwise rounding differences between conventions could break ties differently.
     target_grid = regular_mask_cube(-89.23, 0.37, 2.0, 2.0, row_count=90, column_count=180)
@@ -148,6 +176,9 @@ def test_longitude_convention_does_not_change_the_result(weight_builder, coarse_
 
 
 def test_inverse_distance_is_more_accurate_than_nearest_on_a_smooth_field(coarse_grid, fine_grid):
+    """On a smooth field, inverse distance is closer to the exact values than nearest neighbour (at
+    least 20% lower RMS error), and nearest neighbour's error is plausible for 5 degree spacing.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.7, seed=11)
     target_mask = random_mask(fine_grid, valid_fraction=0.7, seed=12)
     source_field = smooth_field(coarse_grid)
@@ -166,11 +197,19 @@ def test_inverse_distance_is_more_accurate_than_nearest_on_a_smooth_field(coarse
 
 @pytest.fixture
 def regional_rotated_grid():
+    """A 41x41, 0.1 degree regional grid on the standard UK rotated pole, centred on rotated (0, 0),
+    i.e. 52.5N, 2.5W.
+    """
     # A 0.1 degree regional grid centred on rotated (0, 0), i.e. 52.5N, 2.5W.
     return regular_mask_cube(-2.0, -2.0, 0.1, 0.1, row_count=41, column_count=41, north_pole=(37.5, 177.5))
 
 
 def test_regional_rotated_target_picks_neighbours_at_its_true_location(regional_rotated_grid):
+    """Nearest-neighbour regridding of true latitude and longitude from a global 1 degree grid onto
+    the rotated regional grid gives values within about half a source cell of each target point's
+    true position. So rotated target points are located by their true positions, not their rotated
+    coordinates.
+    """
     source_grid = global_mask_cube(1.0)
     regridder = build_regridder(source_grid, regional_rotated_grid, nearest_neighbour_weights)
 
@@ -188,6 +227,10 @@ def test_regional_rotated_target_picks_neighbours_at_its_true_location(regional_
 
 
 def test_regional_rotated_target_with_um_bilinear_reproduces_linear_fields(regional_rotated_grid):
+    """With the default UM method, regridding true latitude onto the rotated regional grid
+    reproduces each target point's true latitude exactly, since bilinear interpolation is exact for
+    linear fields.
+    """
     # Latitude is linear in latitude, so bilinear interpolation reproduces it exactly
     # wherever the stencil does not straddle a pole.
     source_grid = global_mask_cube(1.0)
@@ -199,6 +242,9 @@ def test_regional_rotated_target_with_um_bilinear_reproduces_linear_fields(regio
 
 
 def test_default_method_needs_two_source_points_along_each_axis():
+    """The UM method needs at least two source points along each axis to find bilinear corners, so a
+    single-row source grid is rejected.
+    """
     source_grid = mask_cube([0.0], [0.0, 10.0])
     with pytest.raises(ValueError, match="at least two source points"):
         build_regridder(source_grid, source_grid)
@@ -206,6 +252,9 @@ def test_default_method_needs_two_source_points_along_each_axis():
 
 @pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
 def test_leading_dimensions_match_level_by_level_application(weight_builder, coarse_grid, fine_grid):
+    """Regridding a cube with two leading dimensions in one call gives the same result as regridding
+    each 2D slice separately.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=13)
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=14)
     regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, target_mask, weight_builder)
@@ -226,6 +275,9 @@ def test_leading_dimensions_match_level_by_level_application(weight_builder, coa
 
 
 def test_weight_builder_options_are_bound_with_partial(coarse_grid, fine_grid):
+    """Builder options are bound with `functools.partial`: inverse distance with `neighbour_count=6`
+    stores at most 6 weights per row.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=16)
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=17)
     regridder = build_masked_regridder(
@@ -242,6 +294,10 @@ def test_weight_builder_options_are_bound_with_partial(coarse_grid, fine_grid):
 
 
 def test_empty_source_mask_with_target_points_raises(coarse_grid, fine_grid):
+    """An empty source mask with a non-empty target mask raises `EmptySourceMaskError` (a
+    ValueError), since there are no values to regrid and what to do instead is the caller's
+    decision.
+    """
     empty_source_mask = np.zeros(coarse_grid.shape, dtype=bool)
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=18)
     with pytest.raises(EmptySourceMaskError, match="source mask is empty"):
@@ -251,6 +307,9 @@ def test_empty_source_mask_with_target_points_raises(coarse_grid, fine_grid):
 
 @pytest.mark.parametrize("source_is_empty", [False, True])
 def test_empty_target_mask_gives_an_all_fill_field(source_is_empty, coarse_grid, fine_grid):
+    """An empty target mask is valid and gives an output that is entirely fill value, even when the
+    source mask is empty too.
+    """
     source_mask = (
         np.zeros(coarse_grid.shape, dtype=bool)
         if source_is_empty
@@ -264,6 +323,9 @@ def test_empty_target_mask_gives_an_all_fill_field(source_is_empty, coarse_grid,
 
 
 def test_non_boolean_mask_cubes_are_rejected(coarse_grid, fine_grid):
+    """Source or target mask cubes holding fractions or integers are rejected, so masks are always
+    made explicitly (e.g. `tile_fraction > 0`).
+    """
     tile_fractions = np.random.default_rng(20).random(coarse_grid.shape)
     with pytest.raises(TypeError, match="boolean data"):
         build_regridder(with_mask(coarse_grid, tile_fractions), fine_grid)
@@ -272,6 +334,10 @@ def test_non_boolean_mask_cubes_are_rejected(coarse_grid, fine_grid):
 
 
 def test_missing_data_inside_the_source_mask_is_rejected(coarse_grid, fine_grid):
+    """A NaN, or a value equal to `source_missing_value`, inside the source mask raises an error,
+    because the mask then doesn't describe where the field is defined. The same values outside the
+    mask are ignored.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=21)
     regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, np.ones(fine_grid.shape, dtype=bool))
     first_valid_index = tuple(np.argwhere(source_mask)[0])
@@ -294,6 +360,9 @@ def test_missing_data_inside_the_source_mask_is_rejected(coarse_grid, fine_grid)
 
 
 def test_masked_data_is_allowed_only_outside_the_source_mask(coarse_grid, fine_grid):
+    """Masked data outside the source mask gives the same result as unmasked data, while a masked
+    value inside the source mask raises an error.
+    """
     source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=22)
     regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, np.ones(fine_grid.shape, dtype=bool))
     field = smooth_field(coarse_grid)
@@ -310,6 +379,9 @@ def test_masked_data_is_allowed_only_outside_the_source_mask(coarse_grid, fine_g
 
 
 def test_regridder_keeps_its_own_copies_of_the_mask_cubes(coarse_grid, fine_grid):
+    """The regridder copies the mask cubes it was built from, so changing the caller's cube
+    afterwards doesn't change the regridder.
+    """
     target_mask_cube = with_mask(fine_grid, random_mask(fine_grid, valid_fraction=0.5, seed=23))
     regridder = build_regridder(coarse_grid, target_mask_cube)
     expected_target_mask = target_mask_cube.data.copy()
@@ -318,16 +390,19 @@ def test_regridder_keeps_its_own_copies_of_the_mask_cubes(coarse_grid, fine_grid
 
 
 def _wrong_shape_builder(source_mask_cube, target_mask_cube):
+    """A broken builder whose matrix has one column too many."""
     return csr_array(
         (np.count_nonzero(mask_from_cube(target_mask_cube)), np.count_nonzero(mask_from_cube(source_mask_cube)) + 1)
     )
 
 
 def _unnormalised_builder(source_mask_cube, target_mask_cube):
+    """A broken builder whose rows sum to 2."""
     return 2.0 * nearest_neighbour_weights(source_mask_cube, target_mask_cube)
 
 
 def _negative_builder(source_mask_cube, target_mask_cube):
+    """A broken builder whose rows sum to 1 but include a negative weight."""
     source_point_count = np.count_nonzero(mask_from_cube(source_mask_cube))
     row = [2.0, -1.0] + [0.0] * (source_point_count - 2)
     return csr_array(np.tile(row, (np.count_nonzero(mask_from_cube(target_mask_cube)), 1)))
@@ -342,6 +417,9 @@ def _negative_builder(source_mask_cube, target_mask_cube):
     ],
 )
 def test_weight_builders_that_break_the_contract_are_rejected(bad_weight_builder, message):
+    """`build_regridder` rejects builders that return a matrix of the wrong shape, rows that don't
+    sum to 1, or negative weights.
+    """
     grid = global_mask_cube(30.0)
     with pytest.raises(ValueError, match=message):
         build_regridder(grid, grid, bad_weight_builder)
@@ -351,6 +429,9 @@ def test_weight_builders_that_break_the_contract_are_rejected(bad_weight_builder
 
 
 def test_data_cube_on_a_different_grid_is_rejected(coarse_grid, fine_grid):
+    """Calling the regridder on a cube that isn't on the source mask cube's grid raises, for a
+    different resolution and for longitudes shifted by only 0.1 degrees.
+    """
     regridder = build_regridder(coarse_grid, fine_grid)
     with pytest.raises(ValueError, match="not on the source mask cube's grid"):
         regridder(field_cube(fine_grid, smooth_field(fine_grid)))
@@ -361,6 +442,11 @@ def test_data_cube_on_a_different_grid_is_rejected(coarse_grid, fine_grid):
 
 
 def test_output_cube_has_the_source_metadata_and_the_target_grid(coarse_grid, fine_grid):
+    """The output cube keeps the source cube's name, units, attributes, leading coordinates (depth,
+    layer number) and scalar coordinates (time). Its latitude, longitude and 2D auxiliary
+    coordinates (true latitude) come from the target mask cube. Coordinates on the old grid (surface
+    altitude) and the mask cube's scalar coordinates (pseudo level) are dropped.
+    """
     depth_coord = iris.coords.DimCoord([0.05, 0.2, 0.5], standard_name="depth", units="m")
     source_cube = field_cube(
         coarse_grid,
@@ -403,6 +489,9 @@ def test_output_cube_has_the_source_metadata_and_the_target_grid(coarse_grid, fi
 
 
 def test_aux_factories_survive_only_if_their_dependencies_do(coarse_grid, fine_grid):
+    """A hybrid-height factory is kept if it depends only on leading coordinates, and dropped if it
+    depends on orography on the old grid.
+    """
     level_coord = iris.coords.DimCoord([0, 1], long_name="model_level_number")
     source_cube = field_cube(
         coarse_grid, np.stack([smooth_field(coarse_grid)] * 2), leading_coords=[(level_coord, 0)]
@@ -433,6 +522,9 @@ def test_aux_factories_survive_only_if_their_dependencies_do(coarse_grid, fine_g
 
 
 def test_output_is_masked_outside_the_target_mask_unless_a_fill_value_is_given(coarse_grid, fine_grid):
+    """By default the output is a float64 masked array, masked exactly outside the target mask. With
+    `fill_value` it's a plain array holding `fill_value` there, and the same values inside the mask.
+    """
     target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=24)
     regridder = build_masked_regridder(coarse_grid, np.ones(coarse_grid.shape, dtype=bool), fine_grid, target_mask)
     source_cube = field_cube(coarse_grid, np.stack([smooth_field(coarse_grid)] * 2))
@@ -449,6 +541,7 @@ def test_output_is_masked_outside_the_target_mask_unless_a_fill_value_is_given(c
 
 
 def test_lazy_data_cubes_are_regridded(coarse_grid, fine_grid):
+    """A cube with lazy (dask) data gives the same result as one with real data."""
     regridder = build_regridder(coarse_grid, fine_grid)
     field = smooth_field(coarse_grid)
     lazy_cube = field_cube(coarse_grid, dask.array.from_array(field, chunks=(9, 18)))
@@ -457,6 +550,7 @@ def test_lazy_data_cubes_are_regridded(coarse_grid, fine_grid):
 
 
 def test_regridding_does_not_change_the_source_cube(coarse_grid, fine_grid):
+    """Regridding leaves the source cube unchanged."""
     source_cube = field_cube(coarse_grid, smooth_field(coarse_grid))
     expected = source_cube.copy()
     build_regridder(coarse_grid, fine_grid)(source_cube)
@@ -464,6 +558,11 @@ def test_regridding_does_not_change_the_source_cube(coarse_grid, fine_grid):
 
 
 def test_nearest_source_distances(coarse_grid):
+    """`nearest_source_distances` gives each valid target point's distance to the nearest valid
+    source point, as a cube on the target grid in radians, masked outside the target mask. With only
+    one source row valid, a target on that row is 0 away and one 4 rows (20 degrees) north is 20
+    degrees away.
+    """
     # Source valid only on one row; distance grows with latitude separation along a meridian.
     source_mask = np.zeros(coarse_grid.shape, dtype=bool)
     source_mask[18, :] = True

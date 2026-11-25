@@ -61,6 +61,7 @@ def masked_two_level_source_cube(source_mask_cube):
 
 
 def great_circle_distances(latitudes_degrees, longitudes_degrees, latitude_degrees, longitude_degrees):
+    """Great-circle distances in radians from many points to one point."""
     latitudes, longitudes = np.radians(latitudes_degrees), np.radians(longitudes_degrees)
     latitude, longitude = np.radians(latitude_degrees), np.radians(longitude_degrees)
     cosine = np.sin(latitudes) * np.sin(latitude) + np.cos(latitudes) * np.cos(latitude) * np.cos(
@@ -70,6 +71,15 @@ def great_circle_distances(latitudes_degrees, longitudes_degrees, latitude_degre
 
 
 def check_regrid_follows_the_um_rules(source_mask_cube, target_mask_cube):
+    """Regrid a masked two-level field with the default method and check every valid target point.
+
+    The output must be on the target grid, keep the level coordinate, be masked exactly outside the
+    target mask, use the same weights on both levels and stay within the range of the valid source
+    values. Then, by kind of target point: interior points reproduce the linear field (at the
+    clamped position if beyond the source's outermost points); coastal points copy their heaviest
+    valid corner; unresolved points copy one of the nearest resolved target points. The test fails
+    if any kind of point is missing, so it can't pass by covering only the easy cases.
+    """
     source_mask = mask_from_cube(source_mask_cube)
     target_mask = mask_from_cube(target_mask_cube)
     source_cube = masked_two_level_source_cube(source_mask_cube)
@@ -143,12 +153,21 @@ def check_regrid_follows_the_um_rules(source_mask_cube, target_mask_cube):
 
 
 def test_masked_20_by_20_domain_onto_a_40_by_40_grid_of_the_same_domain():
+    """A masked 20x20 field (1 degree cells) is regridded onto a 40x40 grid (0.5 degree cells) of
+    the same 0-20N, 100-120E domain. The target's continent is larger and has an island the source
+    lacks, and the 40x40 grid's outermost points lie beyond the source's, so they are clamped to its
+    edges.
+    """
     source_mask_cube = domain_grid(SOURCE_DOMAIN_DEGREES, 20, [((10.0, 110.0), 6.0)])
     target_mask_cube = domain_grid(SOURCE_DOMAIN_DEGREES, 40, [((10.0, 110.0), 7.0), ((3.0, 116.0), 1.3)])
     check_regrid_follows_the_um_rules(source_mask_cube, target_mask_cube)
 
 
 def test_masked_20_by_20_domain_downscaled_onto_a_nested_20_by_20_domain():
+    """A masked 20x20 field over 0-20N, 100-120E (1 degree cells) is downscaled onto a 20x20 grid
+    over the smaller nested domain 5-15N, 105-115E (0.5 degree cells). Only the source around the
+    nested domain contributes, and every target point lies within the source domain.
+    """
     source_mask_cube = domain_grid(SOURCE_DOMAIN_DEGREES, 20, [((12.0, 112.0), 5.0)])
     target_mask_cube = domain_grid(NESTED_DOMAIN_DEGREES, 20, [((12.0, 112.0), 6.0), ((6.5, 106.5), 1.0)])
     check_regrid_follows_the_um_rules(source_mask_cube, target_mask_cube)
