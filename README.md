@@ -61,7 +61,7 @@ project template.
 | `src/um_masked_regrid/um_bilinear.py` | `um_bilinear_weights`, the default method, which reproduces the UM reconfiguration |
 | `src/um_masked_regrid/weights.py` | `nearest_neighbour_weights` and `inverse_distance_weights` |
 | `src/um_masked_regrid/coordinates.py` | Functions that read masks and grid coordinates from cubes, and pole rotation |
-| `tests/` | Unit tests on synthetic cubes, plus checks against real UM dumps (skipped if the dumps are absent) |
+| `tests/` | Unit tests on synthetic cubes, including small regional regrids to a finer and a coarser grid |
 
 ### How it works
 
@@ -183,14 +183,10 @@ Further rules:
 The rules were reverse-engineered from native reconfigurations of an ACCESS-AM3
 N96 dump, `am3a.ainitial_n96e`. These were run with `h_int_method=1` and
 `coast_adj_method=3`, onto N48 (`am3a.astart_n48e`, grid points aligned with
-N96) and N512 (`am3a.astart_n512e`, not aligned). The checks are in
-`tests/test_um_native_reconfiguration.py`. They load the dumps with `iris.load`,
-use the land-sea mask as the mask, and go through the cube interface.
-
-The dumps are several GB, so they are not in the repository. To run these
-checks, put them in a directory (with `am3a.astart_n96e` for
-`tests/test_um_dumps.py`) and set `UM_MASKED_REGRID_TEST_DATA` to it; the
-default is `tests/data/`.
+N96) and N512 (`am3a.astart_n512e`, not aligned). The comparisons loaded the
+dumps with `iris.load`, used the land-sea mask as the mask, and went through the
+cube interface. The dumps are several GB, so these comparisons are not part of
+the test suite; the tests check the same rules on small synthetic grids.
 
 | Field | N48 | N512 |
 | --- | --- | --- |

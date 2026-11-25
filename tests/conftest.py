@@ -1,7 +1,4 @@
-"""Shared cube builders, and the location of the optional UM dump test data."""
-
-import os
-from pathlib import Path
+"""Shared cube builders."""
 
 import iris.coord_systems
 import iris.coords
@@ -10,10 +7,6 @@ import numpy as np
 import pytest
 
 from um_masked_regrid import true_point_coordinates
-
-# UM dumps used by the dump-based tests, which are skipped if they are absent.
-# They are several GB, so are not part of the repository.
-TEST_DATA_DIRECTORY = Path(os.environ.get("UM_MASKED_REGRID_TEST_DATA", Path(__file__).resolve().parent / "data"))
 
 EARTH_RADIUS_METRES = 6371229.0
 
