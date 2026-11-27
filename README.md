@@ -5,7 +5,8 @@ fields, which the UM reconfiguration cannot handle.
 
 - **What it does**: given a source and a target mask cube, `um_masked_regrid` builds a
   regridder. Calling it on a cube projects a field defined on the source mask onto
-  the target mask and returns a cube on the target grid.
+  the target mask and returns a cube on the target grid; calling it on a numpy
+  array shaped like the source grid returns an array on the target grid.
 - **Matches the UM**: the default method reproduces the UM reconfiguration's
   horizontal interpolation of land fields. With the land-sea mask as the mask, it
   is bitwise identical to native N96 → N48 output. For N96 → N512 it differs only
@@ -42,6 +43,9 @@ regridder = build_regridder(
 
 # Reuse it for every field and level on that tile.
 target_soil_temperature = regridder(source_soil_temperature_on_tile)
+
+# Plain arrays work too, if their last two dimensions match the source mask cube.
+target_soil_temperature_values = regridder(source_soil_temperature_on_tile.data)
 ```
 
 Install from a clone with `pip install .`, or `pip install -e ".[dev]"` for
@@ -57,7 +61,7 @@ project template.
 
 | Path | Contents |
 | --- | --- |
-| `src/um_masked_regrid/regridder.py` | `build_regridder`, `CubeRegridder` and `nearest_source_distances` |
+| `src/um_masked_regrid/regridder.py` | `build_regridder`, `CubeRegridder`, `regrid_cube`, `regrid_array` and `nearest_source_distances` |
 | `src/um_masked_regrid/um_bilinear.py` | `um_bilinear_weights`, the default method, which reproduces the UM reconfiguration |
 | `src/um_masked_regrid/weights.py` | `nearest_neighbour_weights` and `inverse_distance_weights` |
 | `src/um_masked_regrid/coordinates.py` | Functions that read masks and grid coordinates from cubes, and pole rotation |
@@ -104,6 +108,12 @@ dimensions:
 **Data cubes** passed to the regridder must be on the source mask cube's grid
 (same latitude, longitude and coordinate system); anything else raises
 `ValueError`. Any number of leading dimensions is allowed.
+
+**Data arrays** (numpy, numpy masked or dask) can be passed instead of cubes.
+Their last two dimensions must have the source mask cube's shape; an array has
+no coordinates, so it is assumed to be on the source grid. The result is an
+array with the same leading dimensions, holding the same data as the output
+cube described below would (masked, or filled with `fill_value`).
 
 **The output cube** is built as follows.
 

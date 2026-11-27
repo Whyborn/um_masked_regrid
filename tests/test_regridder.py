@@ -577,3 +577,69 @@ def test_nearest_source_distances(coarse_grid):
     assert distances.data[18, 3] == 0.0
     assert distances.data[22, 3] == pytest.approx(np.radians(20.0))
     np.testing.assert_array_equal(np.ma.getmaskarray(distances.data), ~target_mask)
+
+
+# Plain arrays.
+
+
+@pytest.mark.parametrize("weight_builder", WEIGHT_BUILDERS)
+@pytest.mark.parametrize("fill_value", [None, -1.0])
+def test_arrays_regrid_exactly_like_cubes(weight_builder, fill_value, coarse_grid, fine_grid):
+    """Calling the regridder on a numpy array, with leading dimensions, gives a numpy array holding
+    exactly the data the same field gives as a cube, masked or filled in the same way.
+    """
+    source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=30)
+    target_mask = random_mask(fine_grid, valid_fraction=0.5, seed=31)
+    regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, target_mask, weight_builder)
+    field = np.stack([smooth_field(coarse_grid), 2.0 * smooth_field(coarse_grid)])
+
+    array_output = regridder(field, fill_value=fill_value)
+    cube_output = regridder(field_cube(coarse_grid, field), fill_value=fill_value).data
+
+    assert isinstance(array_output, np.ndarray)
+    assert array_output.shape == (2,) + fine_grid.shape
+    assert np.ma.isMaskedArray(array_output) == (fill_value is None)
+    np.testing.assert_array_equal(np.ma.getmaskarray(array_output), np.ma.getmaskarray(cube_output))
+    np.testing.assert_array_equal(np.ma.getdata(array_output), np.ma.getdata(cube_output))
+
+
+def test_masked_and_lazy_arrays_are_regridded(coarse_grid, fine_grid):
+    """Numpy masked arrays masked only outside the source mask, and dask arrays, are accepted and
+    give the same result as the plain array.
+    """
+    source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=32)
+    regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, np.ones(fine_grid.shape, dtype=bool))
+    field = smooth_field(coarse_grid)
+    expected = regridder(field)
+    np.testing.assert_array_equal(regridder(np.ma.masked_array(field, mask=~source_mask)), expected)
+    np.testing.assert_array_equal(regridder(dask.array.from_array(field, chunks=(9, 18))), expected)
+
+
+def test_array_data_checks_match_the_cube_checks(coarse_grid, fine_grid):
+    """Arrays with masked, non-finite or missing values inside the source mask are rejected, as
+    cubes are.
+    """
+    source_mask = random_mask(coarse_grid, valid_fraction=0.5, seed=33)
+    regridder = build_masked_regridder(coarse_grid, source_mask, fine_grid, np.ones(fine_grid.shape, dtype=bool))
+    field = smooth_field(coarse_grid)
+    with pytest.raises(ValueError, match="array has 1 masked values"):
+        mask = ~source_mask
+        mask[np.argwhere(source_mask)[0][0], np.argwhere(source_mask)[0][1]] = True
+        regridder(np.ma.masked_array(field, mask=mask))
+    with pytest.raises(ValueError, match="array has non-finite values"):
+        regridder(np.where(source_mask, np.nan, field))
+    with pytest.raises(ValueError, match="array holds the missing value"):
+        regridder(np.where(source_mask, -99.0, field), source_missing_value=-99.0)
+
+
+def test_arrays_of_the_wrong_shape_are_rejected(coarse_grid, fine_grid):
+    """An array whose last two dimensions don't match the source grid, or with fewer than two
+    dimensions, raises.
+    """
+    regridder = build_regridder(coarse_grid, fine_grid)
+    with pytest.raises(ValueError, match="not on the source grid"):
+        regridder(smooth_field(fine_grid))
+    with pytest.raises(ValueError, match="not on the source grid"):
+        regridder(smooth_field(coarse_grid).T)
+    with pytest.raises(ValueError, match="not on the source grid"):
+        regridder(smooth_field(coarse_grid)[0])

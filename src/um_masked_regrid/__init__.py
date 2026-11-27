@@ -2,7 +2,7 @@
 # Copyright 2026 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-Regrid fields that are only defined on part of a grid (e.g. CABLE per-tile fields), on iris cubes.
+Regrid fields that are only defined on part of a grid (e.g. CABLE per-tile fields), on iris cubes or numpy arrays.
 """
 
 from . import _version
@@ -21,6 +21,7 @@ from .regridder import (
     EmptySourceMaskError,
     build_regridder,
     nearest_source_distances,
+    regrid_array,
     regrid_cube,
 )
 from .um_bilinear import bilinear_corners, um_bilinear_weights
@@ -43,6 +44,7 @@ __all__ = [
     "nearest_neighbour_distances",
     "nearest_neighbour_weights",
     "nearest_source_distances",
+    "regrid_array",
     "regrid_cube",
     "rotate_pole",
     "rotated_north_pole_degrees",
