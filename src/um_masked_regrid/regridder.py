@@ -1,9 +1,10 @@
-"""Build and apply regridders between masked domains, on iris cubes.
+"""Build and apply regridders between masked domains, on iris cubes or numpy arrays.
 
 A field defined only where the source mask cube is true is projected onto the
 points where the target mask cube is true. Source points outside the source
 mask can never contribute, and every point inside the target mask always
-receives a value.
+receives a value. The mask cubes always describe the grids; the data to regrid
+can be a cube on the source grid or an array shaped like it.
 """
 
 from dataclasses import dataclass
@@ -36,19 +37,24 @@ class CubeRegridder:
     `weights` has shape `(target_point_count, source_point_count)`, where the
     counts are the numbers of true points in each mask, in C order. Rows are
     non-negative and sum to 1. The mask cubes hold both the masks and the grid
-    coordinates. Build with `build_regridder`, then call it on each data cube:
-    the same regridder serves every field and level that shares this pair of
-    masks.
+    coordinates. Build with `build_regridder`, then call it on each data cube or
+    array: the same regridder serves every field and level that shares this pair
+    of masks.
     """
 
     weights: csr_array
     source_mask_cube: iris.cube.Cube
     target_mask_cube: iris.cube.Cube
 
-    def __call__(self, source_data_cube, *, fill_value=None, source_missing_value=None):
-        return regrid_cube(
+    def __call__(self, source_data, *, fill_value=None, source_missing_value=None):
+        """Regrid a cube (returning a cube) or an array (returning an array).
+
+        See `regrid_cube` and `regrid_array`.
+        """
+        regrid_function = regrid_cube if isinstance(source_data, iris.cube.Cube) else regrid_array
+        return regrid_function(
             self,
-            source_data_cube,
+            source_data,
             fill_value=fill_value,
             source_missing_value=source_missing_value,
         )
@@ -138,26 +144,53 @@ def _raise_unless_on_source_grid(source_data_cube, source_mask_cube):
             )
 
 
-def _source_values_inside_mask(source_data_cube, source_mask, source_missing_value):
-    """The source data at the valid source points, shape `(..., source_point_count)`."""
-    source_data = source_data_cube.data
+def _source_values_inside_mask(source_data, source_mask, source_missing_value, data_description):
+    """The source data at the valid source points, shape `(..., source_point_count)`.
+
+    `data_description` names the data in error messages, e.g. "cube 'x'" or "array".
+    """
     is_masked_inside = np.ma.getmaskarray(source_data)[..., source_mask]
     if np.any(is_masked_inside):
         raise ValueError(
-            f"cube {source_data_cube.name()!r} has {np.count_nonzero(is_masked_inside)} masked "
+            f"{data_description} has {np.count_nonzero(is_masked_inside)} masked "
             "values inside the source mask, so the mask does not describe where the field is defined"
         )
     source_values = np.ma.getdata(source_data)[..., source_mask].astype(np.float64)
     if not np.all(np.isfinite(source_values)):
-        raise ValueError(
-            f"cube {source_data_cube.name()!r} has non-finite values inside the source mask"
-        )
+        raise ValueError(f"{data_description} has non-finite values inside the source mask")
     if source_missing_value is not None and np.any(source_values == source_missing_value):
         raise ValueError(
-            f"cube {source_data_cube.name()!r} holds the missing value {source_missing_value} "
+            f"{data_description} holds the missing value {source_missing_value} "
             "inside the source mask"
         )
     return source_values
+
+
+def _regridded_values(regridder, source_data, *, fill_value, source_missing_value, data_description):
+    """Regrid an array already known to be on the source grid.
+
+    Returns float64 data on the target grid: masked outside the target mask, or
+    holding `fill_value` there if it is given.
+    """
+    source_mask = mask_from_cube(regridder.source_mask_cube)
+    target_mask = mask_from_cube(regridder.target_mask_cube)
+    source_values = _source_values_inside_mask(
+        source_data, source_mask, source_missing_value, data_description
+    )
+    target_values = _target_values(regridder.weights, source_values)
+
+    leading_shape = source_values.shape[:-1]
+    output_values = np.full(
+        leading_shape + target_mask.shape,
+        0.0 if fill_value is None else fill_value,
+        dtype=np.float64,
+    )
+    output_values[..., target_mask] = target_values
+    if fill_value is None:
+        output_values = np.ma.masked_array(
+            output_values, mask=np.broadcast_to(~target_mask, output_values.shape).copy()
+        )
+    return output_values
 
 
 def _target_values(weights, source_values):
@@ -254,23 +287,48 @@ def regrid_cube(
     where the field is actually defined.
     """
     _raise_unless_on_source_grid(source_data_cube, regridder.source_mask_cube)
-    source_mask = mask_from_cube(regridder.source_mask_cube)
-    target_mask = mask_from_cube(regridder.target_mask_cube)
-    source_values = _source_values_inside_mask(source_data_cube, source_mask, source_missing_value)
-    target_values = _target_values(regridder.weights, source_values)
-
-    leading_shape = source_values.shape[:-1]
-    output_values = np.full(
-        leading_shape + target_mask.shape,
-        0.0 if fill_value is None else fill_value,
-        dtype=np.float64,
+    output_values = _regridded_values(
+        regridder,
+        source_data_cube.data,
+        fill_value=fill_value,
+        source_missing_value=source_missing_value,
+        data_description=f"cube {source_data_cube.name()!r}",
     )
-    output_values[..., target_mask] = target_values
-    if fill_value is None:
-        output_values = np.ma.masked_array(
-            output_values, mask=np.broadcast_to(~target_mask, output_values.shape).copy()
-        )
     return _output_cube(source_data_cube, regridder.target_mask_cube, output_values)
+
+
+def regrid_array(
+    regridder: CubeRegridder,
+    source_data,
+    *,
+    fill_value=None,
+    source_missing_value=None,
+) -> np.ndarray:
+    """Project an array onto the target mask. Usually called as `regridder(array)`.
+
+    `source_data` is array-like (numpy, numpy masked or dask) whose last two
+    dimensions have the source mask cube's (latitude, longitude) shape. An array
+    carries no coordinates, so it is assumed to lie on the source grid; only its
+    shape is checked. Leading dimensions are kept, and the last two dimensions
+    of the result have the target mask cube's shape.
+
+    `fill_value`, `source_missing_value` and the checks on values inside the
+    source mask behave exactly as in `regrid_cube`.
+    """
+    source_data = np.asanyarray(source_data)
+    source_grid_shape = regridder.source_mask_cube.shape
+    if source_data.ndim < len(source_grid_shape) or source_data.shape[-2:] != source_grid_shape:
+        raise ValueError(
+            f"array of shape {source_data.shape} is not on the source grid: its last two "
+            f"dimensions must have the source mask cube's shape {source_grid_shape}"
+        )
+    return _regridded_values(
+        regridder,
+        source_data,
+        fill_value=fill_value,
+        source_missing_value=source_missing_value,
+        data_description="array",
+    )
 
 
 def nearest_source_distances(regridder: CubeRegridder) -> iris.cube.Cube:
